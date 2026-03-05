@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/auth/', include('authentication.urls')),
     path('api/payments/', include('payments.urls')),
     path('api/jobs/', include('jobs.urls')),
+    path('api/cv/', include('cv.urls')),
     # Additional routes to match frontend expectations
     path('api/register/', views.register, name='register-alt'),
     path('api/login/', views.login, name='login-alt'),
