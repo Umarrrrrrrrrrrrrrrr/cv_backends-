@@ -1,174 +1,265 @@
-import stripe
+"""
+Payment views for eSewa and Khalti (Nepal payment gateways).
+"""
+import base64
+import hashlib
+import hmac
+import uuid
+
+import requests
 from django.conf import settings
-from django.http import HttpResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# --- eSewa ---
+
+def _esewa_signature(total_amount: str, transaction_uuid: str, product_code: str) -> str:
+    """Generate HMAC-SHA256 signature for eSewa."""
+    message = f"total_amount={total_amount},transaction_uuid={transaction_uuid},product_code={product_code}"
+    secret = settings.ESEWA_SECRET_KEY
+    sig = hmac.new(
+        secret.encode() if isinstance(secret, str) else secret,
+        message.encode(),
+        hashlib.sha256,
+    ).digest()
+    return base64.b64encode(sig).decode()
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def esewa_initiate(request):
+    """
+    Initiate eSewa payment. Returns form data for redirect.
+    Body: {
+        "amount": 100,           # product amount (NPR)
+        "tax_amount": 10,        # optional, default 0
+        "product_name": "...",   # optional
+        "success_url": "...",   # required
+        "failure_url": "..."    # required
+    }
+    """
+    data = request.data
+    amount = float(data.get('amount', 0))
+    tax_amount = float(data.get('tax_amount', 0))
+    service_charge = float(data.get('product_service_charge', 0))
+    delivery_charge = float(data.get('product_delivery_charge', 0))
+    success_url = data.get('success_url', '')
+    failure_url = data.get('failure_url', '')
+
+    if amount <= 0:
+        return Response(
+            {'error': 'amount is required and must be greater than 0'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not success_url or not failure_url:
+        return Response(
+            {'error': 'success_url and failure_url are required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    total_amount = amount + tax_amount + service_charge + delivery_charge
+    transaction_uuid = str(uuid.uuid4()).replace('-', '')[:20]
+    product_code = settings.ESEWA_PRODUCT_CODE
+
+    signature = _esewa_signature(
+        str(int(total_amount)),
+        transaction_uuid,
+        product_code,
+    )
+
+    form_url = (
+        'https://epay.esewa.com.np/api/epay/main/v2/form'
+        if settings.ESEWA_USE_PRODUCTION
+        else 'https://rc-epay.esewa.com.np/api/epay/main/v2/form'
+    )
+
+    return Response({
+        'form_url': form_url,
+        'form_data': {
+            'amount': str(int(amount)),
+            'tax_amount': str(int(tax_amount)),
+            'total_amount': str(int(total_amount)),
+            'transaction_uuid': transaction_uuid,
+            'product_code': product_code,
+            'product_service_charge': str(int(service_charge)),
+            'product_delivery_charge': str(int(delivery_charge)),
+            'success_url': success_url,
+            'failure_url': failure_url,
+            'signed_field_names': 'total_amount,transaction_uuid,product_code',
+            'signature': signature,
+        },
+        'transaction_uuid': transaction_uuid,
+    })
 
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def get_publishable_key(request):
-    """Return Stripe publishable key for frontend"""
-    return Response({
-        'publishableKey': settings.STRIPE_PUBLISHABLE_KEY
-    })
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def create_checkout_session(request):
+def esewa_verify(request):
     """
-    Create a Stripe Checkout Session.
-    Body: { "price_id": "price_xxx", "success_url": "...", "cancel_url": "...", "quantity": 1 }
-    Or: { "amount": 1000, "currency": "usd", "success_url": "...", "cancel_url": "..." }
-    amount is in cents (e.g. 1000 = $10.00)
+    Verify eSewa transaction status.
+    Query params: product_code, total_amount, transaction_uuid
     """
-    if not settings.STRIPE_SECRET_KEY:
-        return Response({
-            'error': 'Stripe is not configured. Add STRIPE_SECRET_KEY to .env'
-        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    product_code = request.query_params.get('product_code', settings.ESEWA_PRODUCT_CODE)
+    total_amount = request.query_params.get('total_amount', '')
+    transaction_uuid = request.query_params.get('transaction_uuid', '')
 
-    try:
-        data = request.data
-        success_url = data.get('success_url', 'http://localhost:3000/payment/success')
-        cancel_url = data.get('cancel_url', 'http://localhost:3000/payment/cancel')
-        customer_email = data.get('customer_email', '')
-        metadata = data.get('metadata', {})
-
-        # Option 1: Use Price ID (Stripe product/price)
-        price_id = data.get('price_id')
-        if price_id:
-            session_params = {
-                'payment_method_types': ['card'],
-                'line_items': [{
-                    'price': price_id,
-                    'quantity': data.get('quantity', 1),
-                }],
-                'mode': 'payment',
-                'success_url': success_url + '?session_id={CHECKOUT_SESSION_ID}',
-                'cancel_url': cancel_url,
-                'metadata': metadata,
-            }
-        else:
-            # Option 2: Custom amount (one-time payment)
-            amount = int(data.get('amount', 0))  # in cents
-            currency = data.get('currency', settings.STRIPE_CURRENCY)
-            if amount <= 0:
-                return Response({
-                    'error': 'amount is required and must be greater than 0 (in cents)'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            session_params = {
-                'payment_method_types': ['card'],
-                'line_items': [{
-                    'price_data': {
-                        'currency': currency,
-                        'unit_amount': amount,
-                        'product_data': {
-                            'name': data.get('product_name', 'Payment'),
-                            'description': data.get('description', ''),
-                        },
-                    },
-                    'quantity': data.get('quantity', 1),
-                }],
-                'mode': 'payment',
-                'success_url': success_url + '?session_id={CHECKOUT_SESSION_ID}',
-                'cancel_url': cancel_url,
-                'metadata': metadata,
-            }
-
-        if customer_email:
-            session_params['customer_email'] = customer_email
-
-        session = stripe.checkout.Session.create(**session_params)
-
-        return Response({
-            'sessionId': session.id,
-            'url': session.url,
-        }, status=status.HTTP_200_OK)
-
-    except stripe.error.StripeError as e:
-        return Response({
-            'error': str(e.user_message) if hasattr(e, 'user_message') else str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        return Response({
-            'error': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def create_payment_intent(request):
-    """
-    Create a Payment Intent for custom payment form.
-    Body: { "amount": 1000, "currency": "usd" }
-    amount is in cents.
-    """
-    if not settings.STRIPE_SECRET_KEY:
-        return Response({
-            'error': 'Stripe is not configured. Add STRIPE_SECRET_KEY to .env'
-        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-    try:
-        amount = int(request.data.get('amount', 0))
-        currency = request.data.get('currency', settings.STRIPE_CURRENCY)
-        if amount <= 0:
-            return Response({
-                'error': 'amount is required and must be greater than 0 (in cents)'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        intent = stripe.PaymentIntent.create(
-            amount=amount,
-            currency=currency,
-            automatic_payment_methods={'enabled': True},
-            metadata=request.data.get('metadata', {}),
+    if not total_amount or not transaction_uuid:
+        return Response(
+            {'error': 'total_amount and transaction_uuid are required'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-        return Response({
-            'clientSecret': intent.client_secret,
-            'publishableKey': settings.STRIPE_PUBLISHABLE_KEY,
-        }, status=status.HTTP_200_OK)
-
-    except stripe.error.StripeError as e:
-        return Response({
-            'error': str(e.user_message) if hasattr(e, 'user_message') else str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
-
-
-@csrf_exempt
-@require_http_methods(["POST"])
-def stripe_webhook(request):
-    """Handle Stripe webhooks (payment completed, etc.)"""
-    payload = request.body
-    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE', '')
-    webhook_secret = settings.STRIPE_WEBHOOK_SECRET
-
-    if not webhook_secret:
-        return HttpResponse('Webhook secret not configured', status=500)
+    base_url = (
+        'https://epay.esewa.com.np'
+        if settings.ESEWA_USE_PRODUCTION
+        else 'https://uat.esewa.com.np'
+    )
+    url = f"{base_url}/api/epay/transaction/status/"
+    params = {
+        'product_code': product_code,
+        'total_amount': total_amount,
+        'transaction_uuid': transaction_uuid,
+    }
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except ValueError:
-        return HttpResponse('Invalid payload', status=400)
-    except stripe.error.SignatureVerificationError:
-        return HttpResponse('Invalid signature', status=400)
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return Response(data)
+    except requests.RequestException as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
-    if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
-        # Payment successful - update your database, send confirmation, etc.
-        # session['payment_status'], session['customer_email'], session['metadata']
-        pass
 
-    elif event['type'] == 'payment_intent.succeeded':
-        intent = event['data']['object']
-        # Payment succeeded - update your database
-        pass
+# --- Khalti ---
 
-    return HttpResponse(status=200)
+def _khalti_base_url():
+    return 'https://khalti.com/api/v2' if settings.KHALTI_USE_PRODUCTION else 'https://dev.khalti.com/api/v2'
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def khalti_initiate(request):
+    """
+    Initiate Khalti payment. Returns payment_url to redirect user.
+    Body: {
+        "amount": 1000,         # in paisa (min 1000 = Rs 10)
+        "purchase_order_id": "order-123",
+        "purchase_order_name": "Product Name",
+        "return_url": "...",
+        "website_url": "...",
+        "customer_info": { "name": "...", "email": "...", "phone": "..." }  # optional
+    }
+    """
+    if not settings.KHALTI_SECRET_KEY:
+        return Response(
+            {'error': 'Khalti is not configured. Add KHALTI_SECRET_KEY to .env'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    data = request.data
+    amount = int(data.get('amount', 0))
+    purchase_order_id = data.get('purchase_order_id', str(uuid.uuid4()))
+    purchase_order_name = data.get('purchase_order_name', 'Payment')
+    return_url = data.get('return_url', '')
+    website_url = data.get('website_url', return_url or 'https://example.com')
+    customer_info = data.get('customer_info', {})
+
+    if amount < 1000:
+        return Response(
+            {'error': 'amount must be at least 1000 paisa (Rs 10)'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not return_url:
+        return Response(
+            {'error': 'return_url is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    payload = {
+        'return_url': return_url,
+        'website_url': website_url,
+        'amount': amount,
+        'purchase_order_id': purchase_order_id,
+        'purchase_order_name': purchase_order_name,
+        'customer_info': customer_info,
+    }
+
+    url = f"{_khalti_base_url()}/epayment/initiate/"
+    headers = {
+        'Authorization': f'Key {settings.KHALTI_SECRET_KEY}',
+        'Content-Type': 'application/json',
+    }
+
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=15)
+        try:
+            resp = r.json()
+        except ValueError:
+            resp = {'error': r.text or 'Invalid response from Khalti'}
+
+        if r.status_code != 200:
+            err = resp if isinstance(resp, dict) else {'error': str(resp)}
+            return Response(err, status=r.status_code)
+
+        return Response({
+            'pidx': resp.get('pidx'),
+            'payment_url': resp.get('payment_url'),
+            'expires_at': resp.get('expires_at'),
+            'expires_in': resp.get('expires_in'),
+        })
+    except requests.RequestException as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def khalti_verify(request):
+    """
+    Verify Khalti payment using pidx.
+    Body: { "pidx": "..." }
+    """
+    if not settings.KHALTI_SECRET_KEY:
+        return Response(
+            {'error': 'Khalti is not configured. Add KHALTI_SECRET_KEY to .env'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    pidx = request.data.get('pidx', '')
+    if not pidx:
+        return Response(
+            {'error': 'pidx is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    url = f"{_khalti_base_url()}/epayment/lookup/"
+    headers = {
+        'Authorization': f'Key {settings.KHALTI_SECRET_KEY}',
+        'Content-Type': 'application/json',
+    }
+
+    try:
+        r = requests.post(url, json={'pidx': pidx}, headers=headers, timeout=10)
+        try:
+            resp = r.json()
+        except ValueError:
+            resp = {'error': r.text or 'Invalid response from Khalti'}
+
+        if r.status_code != 200:
+            err = resp if isinstance(resp, dict) else {'error': str(resp)}
+            return Response(err, status=r.status_code)
+
+        return Response(resp)
+    except requests.RequestException as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )

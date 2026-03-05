@@ -187,8 +187,11 @@ CORS_ALLOW_CREDENTIALS = True
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 
-# Stripe
-STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
-STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY', default='')
-STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
-STRIPE_CURRENCY = config('STRIPE_CURRENCY', default='usd')
+# eSewa (Nepal)
+ESEWA_PRODUCT_CODE = config('ESEWA_PRODUCT_CODE', default='EPAYTEST')  # Use EPAYTEST for UAT
+ESEWA_SECRET_KEY = config('ESEWA_SECRET_KEY', default='8gBm/:&EnhH.1/q')  # UAT secret
+ESEWA_USE_PRODUCTION = config('ESEWA_USE_PRODUCTION', default=False, cast=bool)
+
+# Khalti (Nepal)
+KHALTI_SECRET_KEY = config('KHALTI_SECRET_KEY', default='')
+KHALTI_USE_PRODUCTION = config('KHALTI_USE_PRODUCTION', default=False, cast=bool)
