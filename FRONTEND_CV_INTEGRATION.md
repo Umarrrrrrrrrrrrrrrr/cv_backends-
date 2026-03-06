@@ -320,6 +320,54 @@ CORS_ALLOWED_ORIGINS = [
 
 ---
 
+## Troubleshooting: "Nothing happens" when uploading PDF
+
+### 1. Use the correct form field name
+The backend accepts: `file`, `resume`, `cv`, `cv_file`, or `document`. Use one of these:
+
+```javascript
+formData.append('file', file);  // ✅ Recommended
+```
+
+### 2. Trigger the API on file select
+You must call the API when the user selects a file. Use `onChange`:
+
+```jsx
+<input
+  type="file"
+  accept=".pdf,.docx,.doc"
+  onChange={handleGradeFromFile}  // Must call API here
+/>
+```
+
+### 3. Handle errors and show loading state
+```javascript
+try {
+  setLoading(true);
+  const res = await fetch(...);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  setResult(data);
+} catch (err) {
+  setError(err.message);  // Show this to the user!
+} finally {
+  setLoading(false);
+}
+```
+
+### 4. Check backend is running
+```bash
+cd Back_Back && python manage.py runserver
+```
+
+### 5. Test with curl
+```bash
+curl -X POST http://localhost:8000/api/cv/grade/ \
+  -F "file=@/path/to/your/resume.pdf"
+```
+
+---
+
 ## Step 6: Run Both
 
 ```bash

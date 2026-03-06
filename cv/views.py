@@ -1,9 +1,11 @@
 """
 CV/Resume grading and enhancement API.
 """
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.decorators import permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.views import APIView
@@ -12,6 +14,7 @@ from ml.cv_grader import grade_and_enhance, grade_resume, enhance_resume
 from ml.extract_text import extract_text_from_file
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class CVGradeView(APIView):
     """
     Grade and enhance CV/Resume.
@@ -24,14 +27,25 @@ class CVGradeView(APIView):
 
     def post(self, request):
         cv_text = None
+        uploaded = None
 
         # Option 1: Raw text in JSON body
         if request.data.get("cv_text"):
             cv_text = request.data["cv_text"]
 
         # Option 2: File upload (PDF, DOCX)
-        elif request.FILES.get("file"):
-            uploaded = request.FILES["file"]
+        # Accept: file, resume, cv, cv_file, document
+        if not cv_text and request.FILES:
+            uploaded = (
+                request.FILES.get("file")
+                or request.FILES.get("resume")
+                or request.FILES.get("cv")
+                or request.FILES.get("cv_file")
+                or request.FILES.get("document")
+                or (list(request.FILES.values())[0] if request.FILES else None)
+            )
+
+        if uploaded:
             if not uploaded.name.lower().endswith((".pdf", ".docx", ".doc")):
                 return Response(
                     {"error": "Only PDF and DOCX files are supported"},
@@ -41,10 +55,6 @@ class CVGradeView(APIView):
                 cv_text = extract_text_from_file(uploaded)
             except ValueError as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Option 3: Form data with cv_text
-        elif request.data.get("cv_text"):
-            cv_text = request.data["cv_text"]
 
         if not cv_text or not str(cv_text).strip():
             return Response(
@@ -62,6 +72,7 @@ class CVGradeView(APIView):
             )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class CVGradeOnlyView(APIView):
     """Grade only (no enhancement). Returns score and grade."""
     permission_classes = [AllowAny]
@@ -91,6 +102,7 @@ class CVGradeOnlyView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class CVEnhanceView(APIView):
     """Enhance CV only (returns suggestions and enhanced version)."""
     permission_classes = [AllowAny]
