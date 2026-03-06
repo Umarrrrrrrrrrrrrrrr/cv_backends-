@@ -97,12 +97,71 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for user data"""
+    full_name = serializers.SerializerMethodField()
+    profile_photo_url = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'email', 'username', 'is_active', 'is_verified', 'role', 
-                  'last_login_at', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'is_active', 'is_verified', 'last_login_at', 
-                          'created_at', 'updated_at')
+        fields = (
+            'id', 'email', 'username', 'first_name', 'last_name', 'full_name',
+            'phone', 'location', 'bio', 'linkedin_url', 'website_url',
+            'profile_photo', 'profile_photo_url',
+            'is_active', 'is_verified', 'role',
+            'last_login_at', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'is_active', 'is_verified', 'last_login_at',
+                           'created_at', 'updated_at')
+
+    def get_full_name(self, obj):
+        if obj.first_name or obj.last_name:
+            return f"{obj.first_name or ''} {obj.last_name or ''}".strip()
+        return obj.username
+
+    def get_profile_photo_url(self, obj):
+        if obj.profile_photo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile_photo.url)
+            return obj.profile_photo.url
+        return None
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating profile - accepts full_name or first_name/last_name"""
+    full_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    linkedin_url = serializers.URLField(required=False, allow_blank=True)
+    website_url = serializers.URLField(required=False, allow_blank=True)
+
+    class Meta:
+        model = User
+        fields = (
+            'first_name', 'last_name', 'full_name',
+            'username', 'phone', 'location', 'bio',
+            'linkedin_url', 'website_url', 'profile_photo',
+        )
+
+    def validate_linkedin_url(self, value):
+        return value.strip() if value else ''
+
+    def validate_website_url(self, value):
+        return value.strip() if value else ''
+
+    def validate_username(self, value):
+        user = self.instance
+        if user and User.objects.filter(username=value).exclude(pk=user.pk).exists():
+            raise serializers.ValidationError("This username is already taken.")
+        return value.strip()
+
+    def update(self, instance, validated_data):
+        full_name = validated_data.pop('full_name', None)
+        if full_name:
+            parts = full_name.strip().split(None, 1)
+            instance.first_name = parts[0] if parts else ''
+            instance.last_name = parts[1] if len(parts) > 1 else ''
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 
 class LoginSerializer(serializers.Serializer):

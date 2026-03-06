@@ -1,6 +1,8 @@
 """
 URL configuration for backend project.
 """
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
 from authentication import views
@@ -16,5 +18,9 @@ urlpatterns = [
     path('api/login/', views.login, name='login-alt'),
     path('api/suggest-password/', views.suggest_password, name='suggest-password-alt'),
     path('api/google-auth/', views.google_auth, name='google-auth-alt'),
+    path('api/profile/', views.profile, name='profile-alt'),
     path('api/', include('rest_framework.urls')),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

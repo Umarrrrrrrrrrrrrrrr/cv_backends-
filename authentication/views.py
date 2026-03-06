@@ -12,7 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.conf import settings
-from .serializers import UserRegistrationSerializer, UserSerializer, LoginSerializer
+from .serializers import UserRegistrationSerializer, UserSerializer, LoginSerializer, ProfileUpdateSerializer
 from .models import User
 
 
@@ -204,14 +204,41 @@ def login(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def profile(request):
-    """Get current user profile"""
+    """Get or update current user profile"""
+    user = request.user
+
+    if request.method == 'GET':
+        serializer = UserSerializer(user, context={'request': request})
+        return Response({
+            'success': True,
+            'user': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    # PUT or PATCH - update profile
+    data = request.data.copy()
+
+    # Handle full_name from frontend (maps to first_name + last_name)
+    if 'fullName' in data:
+        data['full_name'] = data.pop('fullName')
+    if 'Full Name' in data:
+        data['full_name'] = data.pop('Full Name')
+
+    serializer = ProfileUpdateSerializer(user, data=data, partial=(request.method == 'PATCH'))
+    if serializer.is_valid():
+        serializer.save()
+        return Response({
+            'success': True,
+            'message': 'Profile updated successfully',
+            'user': UserSerializer(user, context={'request': request}).data
+        }, status=status.HTTP_200_OK)
     return Response({
-        'success': True,
-        'user': UserSerializer(request.user).data
-    }, status=status.HTTP_200_OK)
+        'success': False,
+        'message': 'Validation failed',
+        'errors': serializer.errors
+    }, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])

@@ -17,6 +17,14 @@ class User(AbstractUser):
     last_login_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Profile fields
+    phone = models.CharField(max_length=20, blank=True)
+    location = models.CharField(max_length=255, blank=True)
+    bio = models.TextField(blank=True)
+    linkedin_url = models.URLField(max_length=500, blank=True)
+    website_url = models.URLField(max_length=500, blank=True)
+    profile_photo = models.ImageField(upload_to='profile_photos/', blank=True, null=True)
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
