@@ -147,24 +147,17 @@ def login(request):
         
         email = serializer.validated_data['email']
         password = serializer.validated_data['password']
-        
-        try:
-            user = User.objects.get(email=email.lower().strip())
-        except User.DoesNotExist:
-            return Response({
-                'success': False,
-                'message': 'Invalid email or password. Please check your credentials and try again.'
-            }, status=status.HTTP_401_UNAUTHORIZED)
-        
-        # Authenticate user
-        user = authenticate(username=user.username, password=password)
+        email_clean = email.lower().strip()
+
+        # Authenticate - User model uses USERNAME_FIELD='email', so pass email as username
+        user = authenticate(request, username=email_clean, password=password)
         
         if user is None:
             return Response({
                 'success': False,
                 'message': 'Invalid email or password. Please check your credentials and try again.'
             }, status=status.HTTP_401_UNAUTHORIZED)
-        
+
         if not user.is_active:
             return Response({
                 'success': False,
