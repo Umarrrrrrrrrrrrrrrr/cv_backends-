@@ -57,6 +57,15 @@ class CVGradeView(APIView):
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         if not cv_text or not str(cv_text).strip():
+            if request.FILES and uploaded:
+                return Response(
+                    {
+                        "error": "The uploaded PDF/DOCX contains no extractable text. "
+                        "This often happens with image-based PDFs (e.g. scanned documents or PDFs exported as images). "
+                        "Please upload a PDF with selectable text, or paste your CV text directly."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
                 {"error": "Provide cv_text (string) or file (PDF/DOCX upload)"},
                 status=status.HTTP_400_BAD_REQUEST,
