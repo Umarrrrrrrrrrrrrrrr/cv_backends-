@@ -83,7 +83,16 @@ python manage.py migrate
 
 # Create superuser (optional, for admin access)
 python manage.py createsuperuser
+
+# OR: promote an existing registered user (staff + superuser) for React /admin
+python manage.py promote_user your@email.com
 ```
+
+**Sample jobs (optional):** `python manage.py seed_jobs` — inserts **rich** demo job rows (full descriptions, responsibilities, benefits, etc.). Use `python manage.py seed_jobs --force` to delete and recreate those sample titles. See **`docs/NEON_JOBS.md`** for SQL to view data in Neon.
+
+**Staff job API:** `GET/POST/PATCH/DELETE /api/jobs/manage/` — full CRUD for jobs (staff only); used by the React **Admin → Jobs** tab.
+
+**React app (`http://localhost:5173/admin`)** — After promoting, **log out and log in again** on the frontend so JWT + stored user include `is_staff`.
 
 ### 6. Run Development Server
 

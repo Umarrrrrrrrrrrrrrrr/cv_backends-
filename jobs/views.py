@@ -8,6 +8,8 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from authentication.permissions import IsStaffUser
+
 from .models import Job, JobApplication, Skill
 from .serializers import JobListSerializer, JobDetailSerializer, JobApplicationSerializer
 
@@ -126,3 +128,28 @@ class JobApplicationViewSet(ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save(applicant=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class AdminJobViewSet(ModelViewSet):
+    """
+    Staff-only: full CRUD on all jobs (any status, any owner).
+    GET/POST /api/jobs/manage/  |  GET/PATCH/DELETE /api/jobs/manage/{id}/
+    """
+    queryset = Job.objects.all().select_related('created_by').prefetch_related('skills')
+    permission_classes = [IsAuthenticated, IsStaffUser]
+
+    def get_serializer_class(self):
+        if self.action in ('list', 'retrieve'):
+            return JobListSerializer
+        return JobDetailSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'count': queryset.count(),
+            'results': serializer.data,
+        })
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)

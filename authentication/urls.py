@@ -9,4 +9,7 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('suggest-password/', views.suggest_password, name='suggest_password'),
     path('google/', views.google_auth, name='google_auth'),
+    path('dev-reset-password/', views.dev_reset_password, name='dev_reset_password'),
+    path('admin/users/', views.AdminUserListCreateView.as_view(), name='admin_users'),
+    path('admin/users/<uuid:pk>/', views.AdminUserDetailView.as_view(), name='admin_user_detail'),
 ]

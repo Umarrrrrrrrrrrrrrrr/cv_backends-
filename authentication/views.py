@@ -7,13 +7,23 @@ except ImportError:
 from rest_framework import status, generics
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.conf import settings
-from .serializers import UserRegistrationSerializer, UserSerializer, LoginSerializer, ProfileUpdateSerializer
+from .serializers import (
+    UserRegistrationSerializer,
+    UserSerializer,
+    LoginSerializer,
+    ProfileUpdateSerializer,
+    AdminUserDetailSerializer,
+    AdminUserCreateSerializer,
+    AdminUserUpdateSerializer,
+)
 from .models import User
+from .permissions import IsStaffUser
 
 
 def format_validation_errors(errors):
@@ -377,3 +387,134 @@ def google_auth(request):
             'message': 'An error occurred during Google authentication. Please try again.',
             'error': str(e) if settings.DEBUG else None
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def dev_reset_password(request):
+    """
+    Set a new password when DEBUG=True (local development only).
+    Email-based reset without SMTP — disabled when DEBUG=False.
+    """
+    if not settings.DEBUG:
+        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    email = (request.data.get('email') or '').lower().strip()
+    new_password = request.data.get('new_password') or ''
+    new_password2 = (
+        request.data.get('new_password_confirm')
+        or request.data.get('confirmPassword')
+        or ''
+    )
+
+    if not email:
+        return Response({
+            'success': False,
+            'message': 'Email is required.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+    if len(new_password) < 6:
+        return Response({
+            'success': False,
+            'message': 'Password must be at least 6 characters.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+    if new_password != new_password2:
+        return Response({
+            'success': False,
+            'message': 'Passwords do not match.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'No account with this email. Register first.',
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    user.set_password(new_password)
+    user.save()
+    return Response({
+        'success': True,
+        'message': 'Password updated. You can sign in now.',
+    }, status=status.HTTP_200_OK)
+
+
+class AdminUserListCreateView(generics.ListCreateAPIView):
+    """
+    List all users (staff) or create a user.
+    Non-superuser staff only see non-superuser accounts.
+    """
+    permission_classes = [IsAuthenticated, IsStaffUser]
+    pagination_class = None
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AdminUserCreateSerializer
+        return AdminUserDetailSerializer
+
+    def get_queryset(self):
+        qs = User.objects.all().order_by('-created_at')
+        if not self.request.user.is_superuser:
+            qs = qs.filter(is_superuser=False)
+        return qs
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['request'] = self.request
+        return ctx
+
+    def create(self, request, *args, **kwargs):
+        serializer = AdminUserCreateSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(
+            AdminUserDetailSerializer(user, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a user (staff)."""
+    permission_classes = [IsAuthenticated, IsStaffUser]
+    lookup_field = 'pk'
+
+    def get_serializer_class(self):
+        if self.request.method == 'GET':
+            return AdminUserDetailSerializer
+        return AdminUserUpdateSerializer
+
+    def get_queryset(self):
+        qs = User.objects.all()
+        if not self.request.user.is_superuser:
+            qs = qs.filter(is_superuser=False)
+        return qs
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['request'] = self.request
+        return ctx
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = AdminUserUpdateSerializer(
+            instance,
+            data=request.data,
+            partial=partial,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            AdminUserDetailSerializer(instance, context={'request': request}).data,
+        )
+
+    def perform_destroy(self, instance):
+        if instance.pk == self.request.user.pk:
+            raise PermissionDenied('You cannot delete your own account.')
+        if instance.is_superuser and User.objects.filter(is_superuser=True).count() <= 1:
+            raise PermissionDenied('Cannot delete the last superuser.')
+        instance.delete()

@@ -107,10 +107,13 @@ class UserSerializer(serializers.ModelSerializer):
             'phone', 'location', 'bio', 'linkedin_url', 'website_url',
             'profile_photo', 'profile_photo_url',
             'is_active', 'is_verified', 'role',
+            'is_staff', 'is_superuser',
             'last_login_at', 'created_at', 'updated_at',
         )
-        read_only_fields = ('id', 'is_active', 'is_verified', 'last_login_at',
-                           'created_at', 'updated_at')
+        read_only_fields = (
+            'id', 'is_active', 'is_verified', 'is_staff', 'is_superuser',
+            'last_login_at', 'created_at', 'updated_at',
+        )
 
     def get_full_name(self, obj):
         if obj.first_name or obj.last_name:
@@ -160,6 +163,114 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             instance.last_name = parts[1] if len(parts) > 1 else ''
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class AdminUserDetailSerializer(serializers.ModelSerializer):
+    """Staff API: read user for list/detail."""
+
+    class Meta:
+        model = User
+        fields = (
+            'id', 'email', 'username', 'first_name', 'last_name', 'role',
+            'phone', 'location', 'bio',
+            'is_active', 'is_verified', 'is_staff', 'is_superuser',
+            'last_login_at', 'created_at', 'updated_at',
+        )
+
+
+class AdminUserCreateSerializer(serializers.ModelSerializer):
+    """Staff API: create user (superuser may set is_staff / is_superuser)."""
+    password = serializers.CharField(write_only=True, min_length=6)
+    password_confirm = serializers.CharField(write_only=True, required=True)
+
+    class Meta:
+        model = User
+        fields = (
+            'email', 'username', 'password', 'password_confirm',
+            'first_name', 'last_name', 'role', 'is_active', 'is_verified',
+            'is_staff', 'is_superuser',
+        )
+
+    def validate_email(self, value):
+        v = value.lower().strip()
+        if User.objects.filter(email=v).exists():
+            raise serializers.ValidationError('This email is already registered.')
+        return v
+
+    def validate_username(self, value):
+        v = value.strip()
+        if len(v) < 2:
+            raise serializers.ValidationError('Username must be at least 2 characters.')
+        if User.objects.filter(username=v).exists():
+            raise serializers.ValidationError('This username is already taken.')
+        return v
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if request and not request.user.is_superuser:
+            attrs.pop('is_superuser', None)
+            attrs.pop('is_staff', None)
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password': 'Passwords do not match.'})
+        attrs.pop('password_confirm', None)
+        return attrs
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        email = validated_data.pop('email')
+        username = validated_data.pop('username')
+        user = User.objects.create_user(
+            email=email,
+            username=username,
+            password=password,
+        )
+        for attr, value in validated_data.items():
+            setattr(user, attr, value)
+        user.save()
+        return user
+
+
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    """Staff API: update user; optional new password."""
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True, min_length=6)
+
+    class Meta:
+        model = User
+        fields = (
+            'email', 'username', 'first_name', 'last_name', 'role',
+            'phone', 'location', 'bio',
+            'is_active', 'is_verified', 'is_staff', 'is_superuser', 'password',
+        )
+
+    def validate_email(self, value):
+        v = value.lower().strip()
+        user = self.instance
+        if User.objects.filter(email=v).exclude(pk=user.pk).exists():
+            raise serializers.ValidationError('This email is already in use.')
+        return v
+
+    def validate_username(self, value):
+        v = value.strip()
+        user = self.instance
+        if User.objects.filter(username=v).exclude(pk=user.pk).exists():
+            raise serializers.ValidationError('This username is already taken.')
+        return v
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if request and not request.user.is_superuser:
+            attrs.pop('is_superuser', None)
+            attrs.pop('is_staff', None)
+        return attrs
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if password:
+            instance.set_password(password)
         instance.save()
         return instance
 
