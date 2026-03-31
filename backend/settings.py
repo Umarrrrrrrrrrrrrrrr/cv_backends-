@@ -78,16 +78,23 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database - Neon PostgreSQL only
 # Set DATABASE_URL in .env (get from Neon dashboard → Connection Details)
 # Or use PG* vars: PGUSER, PGPASSWORD, PGHOST, PGDATABASE, PGPORT
+#
+# If `runserver` hangs after "System check identified no issues", the app is usually
+# waiting on PostgreSQL (wrong password, firewall, or Neon asleep). Lower timeout
+# surfaces errors quickly; see PG_CONNECT_TIMEOUT below.
 DATABASE_URL = config('DATABASE_URL', default='')
+_PG_CONNECT_TIMEOUT = int(config('PG_CONNECT_TIMEOUT', default=10))
 
 if DATABASE_URL:
-    DATABASES = {
-        'default': dj_database_url.parse(
-            DATABASE_URL,
-            conn_max_age=600,
-            ssl_require=True,
-        )
-    }
+    _parsed = dj_database_url.parse(
+        DATABASE_URL,
+        conn_max_age=600,
+        ssl_require=True,
+    )
+    _parsed.setdefault('OPTIONS', {})
+    # psycopg2: fail fast instead of hanging when DB is unreachable
+    _parsed['OPTIONS']['connect_timeout'] = _PG_CONNECT_TIMEOUT
+    DATABASES = {'default': _parsed}
 else:
     DATABASES = {
         'default': {
@@ -98,7 +105,10 @@ else:
             'HOST': config('PGHOST', default='ep-morning-haze-ai07we7z-pooler.c-4.us-east-1.aws.neon.tech'),
             'PORT': config('PGPORT', default='5432'),
             'CONN_MAX_AGE': 600,
-            'OPTIONS': {'sslmode': 'require'},
+            'OPTIONS': {
+                'sslmode': 'require',
+                'connect_timeout': _PG_CONNECT_TIMEOUT,
+            },
         }
     }
 
